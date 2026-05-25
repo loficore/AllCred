@@ -19,6 +19,8 @@ pub const Credential = struct {
 };
 
 pub const CredentialError = error{
+    OutOfMemory,
+
     // Set 操作失败（可携带具体原因）
     SetFailed,
 
@@ -28,11 +30,8 @@ pub const CredentialError = error{
     // 删除失败
     DeleteFailed,
 
-    // 找不到（建议携带 service/account 信息）
-    NotFound,
-
-    // 权限问题（建议携带哪个操作被拒绝）
-    AccessDenied,
+    // UTF-8/UTF-16 转换失败
+    UnicodeError,
 
     // 其他错误（建议携带原始错误）
     Unexpected,
