@@ -1,11 +1,5 @@
 const std = @import("std");
 
-// Although this function looks imperative, it does not perform the build
-// directly and instead it mutates the build graph (`b`) that will be then
-// executed by an external runner. The functions in `std.Build` implement a DSL
-// for defining build steps and express dependencies between them, allowing the
-// build runner to parallelize the build automatically (and the cache system to
-// know when a step doesn't need to be re-run).
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const mode = b.standardOptimizeOption(.{});
@@ -26,14 +20,49 @@ pub fn build(b: *std.Build) void {
         std.debug.print("Unsupported OS: {}\n", .{target.result.os});
     }
 
-    const main_test = b.addTest(.{
-        .name = "main_test",
-        .root_module = moudule,
+    const linux_test_module = b.addModule("linux_test", .{
+        .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = "src/test/linux_test.zig" } },
+        .target = target,
+        .optimize = mode,
     });
 
-    main_test.root_module.addImport("AllCred", moudule);
+    linux_test_module.addImport("AllCred", moudule);
 
-    const run_main_tests = b.addRunArtifact(main_test);
+    if (target.result.os.tag == .linux) {
+        linux_test_module.linkSystemLibrary("libsecret-1", .{});
+        linux_test_module.link_libc = true;
+    }
+
+    const windows_test_module = b.addModule("windows_test", .{
+        .root_source_file = .{ .src_path = .{ .owner = b, .sub_path = "src/test/windows_test.zig" } },
+        .target = target,
+        .optimize = mode,
+    });
+
+    windows_test_module.addImport("AllCred", moudule);
+
+    if (target.result.os.tag == .windows) {
+        windows_test_module.linkSystemLibrary("advapi32", .{});
+        windows_test_module.link_libc = true;
+    }
+
+    const linux_test = b.addTest(.{
+        .name = "linux_test",
+        .root_module = linux_test_module,
+    });
+
+    const windows_test = b.addTest(.{
+        .name = "windows_test",
+        .root_module = windows_test_module,
+    });
+
     const test_step = b.step("test", "Run tests");
-    test_step.dependOn(&run_main_tests.step);
+
+    if (target.result.os.tag == .linux) {
+        const run_linux_tests = b.addRunArtifact(linux_test);
+        test_step.dependOn(&run_linux_tests.step);
+    } else if (target.result.os.tag == .windows) {
+        const run_windows_tests = b.addRunArtifact(windows_test);
+        test_step.dependOn(&run_windows_tests.step);
+    }
 }

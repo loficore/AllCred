@@ -8,7 +8,7 @@ const CredentialDiagnostic = root.CredentialDiagnostic;
 // 1. 基本流程 + 清理副作用
 // ============================================================
 
-test "linux: set, get, delete the credentials" {
+test "windows: set, get, delete the credentials" {
     const gpa = std.testing.allocator;
 
     const cred = Credential{
@@ -35,17 +35,17 @@ test "linux: set, get, delete the credentials" {
 }
 
 // ============================================================
-// 2. 验证被忽略的功能点
+// 2. 验证 Windows 特有功能点
 // ============================================================
 
-test "linux: description returns null after get" {
+test "windows: description is retrievable after get" {
     const gpa = std.testing.allocator;
 
     const cred = Credential{
-        .service = "test_desc_returns_null",
+        .service = "test_desc_retrievable",
         .account = "test_account",
         .secret = "test_password",
-        .description = "This description should be ignored by libsecret",
+        .description = "A test description",
         .persist = true,
     };
     defer root.delete(cred.service, cred.account, null) catch {};
@@ -57,13 +57,40 @@ test "linux: description returns null after get" {
         gpa.free(retrieved_cred.service);
         gpa.free(retrieved_cred.account);
         if (retrieved_cred.secret) |s| gpa.free(s);
+        if (retrieved_cred.description) |d| gpa.free(d);
     }
 
-    // libsecret does not store description as a retrievable field
-    try std.testing.expect(retrieved_cred.description == null);
+    // Windows stores description in the Comment field
+    try std.testing.expect(retrieved_cred.description != null);
+    try std.testing.expectEqualStrings("A test description", retrieved_cred.description.?);
 }
 
-test "linux: persist field is always true after get" {
+test "windows: default description is set when not provided" {
+    const gpa = std.testing.allocator;
+
+    const cred = Credential{
+        .service = "test_default_desc",
+        .account = "test_account",
+        .secret = "test_password",
+        .persist = true,
+    };
+    defer root.delete(cred.service, cred.account, null) catch {};
+
+    try root.set(cred, null);
+
+    const retrieved_cred = try root.get(gpa, cred.service, cred.account, null);
+    defer {
+        gpa.free(retrieved_cred.service);
+        gpa.free(retrieved_cred.account);
+        if (retrieved_cred.secret) |s| gpa.free(s);
+        if (retrieved_cred.description) |d| gpa.free(d);
+    }
+
+    // Default description format: "Credential for {service} ({account})"
+    try std.testing.expect(retrieved_cred.description != null);
+}
+
+test "windows: persist field is always true after get" {
     const gpa = std.testing.allocator;
 
     const cred = Credential{
@@ -81,13 +108,14 @@ test "linux: persist field is always true after get" {
         gpa.free(retrieved_cred.service);
         gpa.free(retrieved_cred.account);
         if (retrieved_cred.secret) |s| gpa.free(s);
+        if (retrieved_cred.description) |d| gpa.free(d);
     }
 
-    // libsecret always persists, so persist should be true
+    // Windows implementation always returns persist = true (CRED_PERSIST_LOCAL_MACHINE)
     try std.testing.expect(retrieved_cred.persist == true);
 }
 
-test "linux: diagnostic is populated on get error" {
+test "windows: diagnostic is populated on get error" {
     var diagnostic = CredentialDiagnostic{
         .service = "nonexistent_svc",
         .account = "nonexistent_acc",
@@ -98,15 +126,13 @@ test "linux: diagnostic is populated on get error" {
         try std.testing.expect(err == CredentialError.GetFailed);
         try std.testing.expectEqualStrings("nonexistent_svc", diagnostic.service);
         try std.testing.expectEqualStrings("nonexistent_acc", diagnostic.account);
-        // error_message should be set by libsecret
         try std.testing.expect(diagnostic.error_message != null);
         return;
     };
     try std.testing.expect(false);
 }
 
-test "linux: diagnostic is populated on set error with null diagnostic" {
-    // Passing null diagnostic should not crash
+test "windows: diagnostic is populated on set error with null diagnostic" {
     const cred = Credential{
         .service = "test_null_diagnostic",
         .account = "test_account",
@@ -118,11 +144,45 @@ test "linux: diagnostic is populated on set error with null diagnostic" {
     try root.set(cred, null);
 }
 
+test "windows: set and get with diagnostic on success path" {
+    const gpa = std.testing.allocator;
+
+    const cred = Credential{
+        .service = "test_diag_success",
+        .account = "test_account",
+        .secret = "test_password",
+        .persist = true,
+    };
+    defer root.delete(cred.service, cred.account, null) catch {};
+
+    var set_diag = CredentialDiagnostic{
+        .service = cred.service,
+        .account = cred.account,
+        .error_message = null,
+    };
+    try root.set(cred, &set_diag);
+    try std.testing.expect(set_diag.error_message == null);
+
+    var get_diag = CredentialDiagnostic{
+        .service = cred.service,
+        .account = cred.account,
+        .error_message = null,
+    };
+    const retrieved = try root.get(gpa, cred.service, cred.account, &get_diag);
+    defer {
+        gpa.free(retrieved.service);
+        gpa.free(retrieved.account);
+        if (retrieved.secret) |s| gpa.free(s);
+        if (retrieved.description) |d| gpa.free(d);
+    }
+    try std.testing.expect(get_diag.error_message == null);
+}
+
 // ============================================================
 // 3. 幂等性测试
 // ============================================================
 
-test "linux: set overwrites existing credential" {
+test "windows: set overwrites existing credential" {
     const gpa = std.testing.allocator;
 
     const cred_v1 = Credential{
@@ -146,10 +206,10 @@ test "linux: set overwrites existing credential" {
         gpa.free(retrieved_v1.service);
         gpa.free(retrieved_v1.account);
         if (retrieved_v1.secret) |s| gpa.free(s);
+        if (retrieved_v1.description) |d| gpa.free(d);
     }
     try std.testing.expectEqualStrings("password_v1", retrieved_v1.secret.?);
 
-    // overwrite with v2
     try root.set(cred_v2, null);
 
     const retrieved_v2 = try root.get(gpa, cred_v2.service, cred_v2.account, null);
@@ -157,17 +217,17 @@ test "linux: set overwrites existing credential" {
         gpa.free(retrieved_v2.service);
         gpa.free(retrieved_v2.account);
         if (retrieved_v2.secret) |s| gpa.free(s);
+        if (retrieved_v2.description) |d| gpa.free(d);
     }
     try std.testing.expectEqualStrings("password_v2", retrieved_v2.secret.?);
 }
 
-test "linux: delete non-existent credential returns DeleteFailed" {
-    // libsecret's secret_password_clear_sync returns failure when no match exists
+test "windows: delete non-existent credential returns DeleteFailed" {
     const result = root.delete("nonexistent_service_xyz", "nonexistent_account_xyz", null);
     try std.testing.expectError(CredentialError.DeleteFailed, result);
 }
 
-test "linux: multiple credentials with different services" {
+test "windows: multiple credentials with different services" {
     const gpa = std.testing.allocator;
 
     const cred_a = Credential{
@@ -195,12 +255,14 @@ test "linux: multiple credentials with different services" {
         gpa.free(retrieved_a.service);
         gpa.free(retrieved_a.account);
         if (retrieved_a.secret) |s| gpa.free(s);
+        if (retrieved_a.description) |d| gpa.free(d);
     }
     const retrieved_b = try root.get(gpa, cred_b.service, cred_b.account, null);
     defer {
         gpa.free(retrieved_b.service);
         gpa.free(retrieved_b.account);
         if (retrieved_b.secret) |s| gpa.free(s);
+        if (retrieved_b.description) |d| gpa.free(d);
     }
 
     try std.testing.expectEqualStrings("secret_a", retrieved_a.secret.?);
@@ -211,50 +273,16 @@ test "linux: multiple credentials with different services" {
 // 4. 错误路径测试
 // ============================================================
 
-test "linux: get non-existent returns GetFailed" {
+test "windows: get non-existent returns GetFailed" {
     const result = root.get(std.testing.allocator, "nonexistent_service_abc", "nonexistent_account_abc", null);
     try std.testing.expectError(CredentialError.GetFailed, result);
-}
-
-test "linux: set and get with diagnostic on success path" {
-    const gpa = std.testing.allocator;
-
-    const cred = Credential{
-        .service = "test_diag_success",
-        .account = "test_account",
-        .secret = "test_password",
-        .persist = true,
-    };
-    defer root.delete(cred.service, cred.account, null) catch {};
-
-    var set_diag = CredentialDiagnostic{
-        .service = cred.service,
-        .account = cred.account,
-        .error_message = null,
-    };
-    try root.set(cred, &set_diag);
-    // on success, error_message should remain null
-    try std.testing.expect(set_diag.error_message == null);
-
-    var get_diag = CredentialDiagnostic{
-        .service = cred.service,
-        .account = cred.account,
-        .error_message = null,
-    };
-    const retrieved = try root.get(gpa, cred.service, cred.account, &get_diag);
-    defer {
-        gpa.free(retrieved.service);
-        gpa.free(retrieved.account);
-        if (retrieved.secret) |s| gpa.free(s);
-    }
-    try std.testing.expect(get_diag.error_message == null);
 }
 
 // ============================================================
 // 5. 内存安全 - 多次循环 set/get/delete
 // ============================================================
 
-test "linux: repeated set/get/delete cycle has no memory leaks" {
+test "windows: repeated set/get/delete cycle has no memory leaks" {
     const gpa = std.testing.allocator;
 
     var i: usize = 0;
@@ -276,6 +304,7 @@ test "linux: repeated set/get/delete cycle has no memory leaks" {
             gpa.free(retrieved.service);
             gpa.free(retrieved.account);
             if (retrieved.secret) |s| gpa.free(s);
+            if (retrieved.description) |d| gpa.free(d);
         }
 
         try std.testing.expectEqualStrings(secret, retrieved.secret.?);
